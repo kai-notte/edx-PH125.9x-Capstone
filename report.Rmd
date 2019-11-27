@@ -1,0 +1,442 @@
+---
+title: "Capstone Report - Product Classification by Product Name"
+author: "Kai Notté"
+date: "25.11.2019"
+output: pdf_document
+---
+# Introduction
+
+This capstone project is about the classification of products based on their product name. As a product manager of a distributor for electronic components one of my recurring tasks is to classify products. Beside of mercantile classifications like stocking or pricing, it is the classification for the product category in our web shop. This can be a highly time-consuming tasks, depending on the product information provided by the manufacturer. Indeed, according to some internal tests, our accuracy is only about 80% by manual work, which will take about 1h to classify 1,000 products.
+
+The goal of this project is to develop a machine learning algorithm to somehow automatic this process by using giving product descriptions or names and improve the achieved accuracy and reduce time consumption.
+
+As a project data set I choose the [LEGO - Database](https://www.kaggle.com/rtatman/lego-database) data set from Kaggle, provided by Rachael Tatman. This data set was originally compiled by [Rebrickable.Com](https://rebrickable.com/about/), which is a website to help to identify original LEGO sets that can be built with already owned bricks.
+
+This data set includes several files which will be analysed in the following sections. The file *parts.csv* includes a product ID, the product name and the corresponding category. This file will be the core of this project. Additional files will be introduced in the section **Data Analysis**
+
+This Report is separated into three sections: The next section **Data Analysis** will load, analyse and prepare the data set. Afterwards, the section **Results** presents the final model which will be used in the script. The outcome as well as its limitation and future work will be summarized in the **Conclusion** section.
+
+# Data Analysis
+
+This section is about the data preparation, the analysis and the development of the final model. It is seperated into four subsections: The first subsection introduces all used libraries and load them into the workspace. If necessary, these packages will be installed automatically from the *CRAN* repository. Thereafter all required data sets from the *LEGO Database* data set will be downloaded and prepared for the data analysis. In the third subsection, the data set will be split into a train and a validation data set. Finally, in the fourth subsection, the train data set will be analysed and evaluate for the final model.
+
+## Load Libraries
+
+This subsection briefly introduces packages, used in this project. Furthermore, if the package is not loaded yet, it will be installed from the *CRAN* repository.
+
+### caret
+
+The *caret* package was already introduced in the course. It is designed to support the creation of predictive models.
+
+```{r ll_caret, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+``` 
+
+### tidytext
+
+The *tidyverse* package is a supportive package to *tidyverse*. It includes several functions to transform text into tidy data set.
+
+```{r ll_tidytext, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+if(!require(tidytext)) install.packages("tidytext", repos = "http://cran.us.r-project.org")
+```
+
+### tidyverse
+
+The *tidyverse* package contains several packages useful for data science. Throughout the previous course these packages were used.
+
+```{r ll_tidyverse, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+```
+
+### tm
+
+The *tm* package is a collection of useful function for text mining application.
+
+```{r ll_tm, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+if(!require(tm)) install.packages("tm", repos = "http://cran.us.r-project.org")
+```
+
+## Load Data sets
+
+The data set was originally downloaded as the data set [LEGO - Database](https://www.kaggle.com/rtatman/lego-database) from Kaggle. Unfortunately, Kaggle does not allow an automatic download. Therefore I copied all required data into my [GitHub repository](https://github.com/kai-notte/edx-PH125.9x-productclassification). If the data files are not already provided in the project subfolder *data*, it will be downloaded into these from GitHub.
+
+The original data set includes 9 csv-files:
+
+|File |Content|
+|---|---|
+|color.csv|Information about LEGO colors, including a unique color ID, the corresponding name and its approximate RGB value.|
+|inventories.csv|Information on inventories. This file is not used in the project.|
+|inventory_parts.csv|Information on parts of an inventory. This file is not used in the project.|
+|inventory_sets.csv|Relation of inventories to each set. This file is not used in the project.|
+|part_categories.csv|Information on all part categories, including a unique ID and its name.|
+|parts.csv|Information on every part of the data set, including a unique ID, the corresponding name of the part and its related category ID.|
+|sets.csv|Information on the LEGO sets. This file is not used in the project.|
+|themes.csv|Information on LEGO themes. This file is not used in the project.|
+
+In this model, three out of these 9 files will be used: *parts.csv*, *part_categories.csv* and *colors.csv*.
+
+### parts.csv
+
+The file *parts.csv* contains the part id (`part_num`), the name (`name`) and the related category ID (`part_cat_id`) for each part in this data set.
+
+```{r ld_parts, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+filePath_parts <- "./data/parts.csv"
+
+if(!file.exists(filePath_parts)){
+  download.file("https://github.com/kai-notte/edx-PH125.9x-productclassification/raw/master/data/parts.csv",
+  destfile="./data/parts.csv",
+  method="auto")
+}
+parts <- read_csv(filePath_parts, col_names = TRUE)
+head(parts)
+parts %>% unique() %>% count()
+```
+
+As shown above, it contains 25993 different part numbers, each linked to a descriptive name and a category id.
+
+### part_categories.csv
+
+The file *part_categories.csv* describes the product categories by adding the name to an unique ID.
+
+```{r ld_partCategories, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+filePath_categories <- "./data/part_categories.csv"
+if(!file.exists(filePath_parts)){
+  download.file("https://github.com/kai-notte/edx-PH125.9x-productclassification/raw/master/data/part_categories.csv",
+  destfile="./data/part_categories.csv",
+  method="auto")
+}
+categories <- read_csv(filePath_categories, col_names = TRUE)
+categories
+```
+
+The data set contains 57 different categories represented in this file. To make the data set more readable, the categorie names will be add to `parts`.
+
+```{r ld_partCategories_join, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+parts <- inner_join(parts, categories, by = c("part_cat_id" = "id")) %>% select(part_num, name.x, name.y) %>% rename(pid = part_num, pname = name.x, cname = name.y)
+rm(categories)
+```
+
+### colors.csv
+
+The last file *colors.csv* contains all colors used for LEGO bricks. This information will be used to improve the data set by removing unimportant color information from the product name.
+
+```{r ld_colors, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+filePath_colors <- "./data/colors.csv"
+if(!file.exists(filePath_parts)){
+  download.file("https://github.com/kai-notte/edx-PH125.9x-productclassification/raw/master/data/colors.csv",
+  destfile="./data/colors.csv",
+  method="auto")
+}
+# Adjust to lower cases to normalize the spelling
+colors <- read_csv(filePath_colors, col_names = TRUE) %>% mutate(lcName = tolower(name))
+```
+
+## Separate train and validation data set
+
+The original data set 'parts' will be split into the data sets `train` and `validation`. The `train` data set will be used to analyse the data set as well as to train and evaluate the model in progress. The evaluation of the final model will be done by using the `validation` data set.
+
+```{r tv_split, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Validation data set will be 10% of original data set
+set.seed(1, sample.kind="Rounding")
+index <- createDataPartition(y = parts$cname, times = 1, p = 0.1, list = FALSE)
+temp1 <- parts[-index,]
+temp2 <- parts[index,]
+
+# Make sure every category name `cname` is in the train data set
+
+validation <- temp2 %>% semi_join(temp1, by = "cname")
+
+# Add rows removed from validation set back into train set
+
+removed <- anti_join(temp2, validation)
+train <- rbind(temp1, removed)
+
+# Remove unused dfs
+rm(removed, temp1, temp2, index, parts)
+```
+
+## Data Analysis
+
+To start with the development of the model, some general information about the `train` data set:
+
+```{r da_general, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+dim(train)
+head(train)
+```
+
+As you can see, the train data set includes 23371 observations with 3 different variable: `pid` as the product ID, `pname` as the product name and `cname` as the category name.
+
+The value `pid` is unique:
+
+```{r da_unique_pid, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Number of rows:
+train %>% nrow()
+
+# Number of unique pids:
+train$pid %>% unique() %>% length()
+```
+
+`pid` will be used as primary key in the data set, but not analysed regarding its usage for the final algorithm.
+
+As mentioned earlier, there are 57 different categories in the overall data set. The value `cname` should contain all of them:
+
+```{r da_categories, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Number of categories:
+train$cname %>% unique() %>% length()
+
+# List of categories:
+train$cname %>% unique()
+```
+
+`cname` will be used to name the classification.
+
+The value `pname` will be used as input to the machine-learning algorithm. Therefore some further preprocessing is required.
+
+The idea of the final algorithm is the following: `pname` will be split into its tokens, means single words. The result will be a tidy text data frame which will be transformed into a Document-Term-Matrix. This Matrix will be the input for the train-function of the `caret` package.
+
+To create tokens of `pname` the following code will be used:
+
+```{r da_createToken1, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Create token without preprocessing as a tidy text data frame
+train_token <- train %>% unnest_tokens(output = word, input = pname)
+dim(train_token)
+head(train_token)
+
+# Number of unique tokens:
+train_token %>% select(word) %>% unique() %>% count()
+```
+
+The first try to create tokens of the value `pname` generates a big data frame with a lot of tokens. For an efficient algorithm it is important to minimize the input as much as possible. This means, further analysis of `pname` should be done.
+
+As you can see from the examples, the value `pname` contains information of each single brick. Some of these are written like 'number x number' or 'number x number x number'. These patterns describe the dimension of each brick, which means it is a single information. But the first try to create tokens separates these patters, which means that the information of their relation is lost. As a simple trick, the spaces in these patterns will be removed (e.g.: "2 x 2" -> "2x2")
+
+```{r da_createToken2, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Remove spaces in pattern: " x " to "x"
+train <- as_tibble(lapply(train, function(x) {
+  gsub(" x ", "x", x)
+}))
+
+# Create tidy text data frame without further preprocessing
+train_token <- train %>% unnest_tokens(output = word, input = pname)
+dim(train_token)
+head(train_token)
+```
+
+The results shows a big impact on the data frame which becomes smaller with the optimized patterns.
+
+Similar to any other text `pname` contains stop words which do not transport any information for the algorithm. Furthermore, numbers will be remove as well due to the same reason. The following code will remove these.
+
+```{r da_remove_stopwords, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Remove stop words
+train_token <- train_token %>% anti_join(stop_words, by=c("word" = "word"))
+dim(train_token)
+```
+
+```{r da_remove_numbers, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Remove numbers
+train_token <- train_token %>% filter(!str_detect(word, "^[0-9]*$"))
+dim(train_token)
+head(train_token)
+```
+
+Again, these preprocessings show some impact by removing tokens from the tidy text data frame.
+
+As mentioned in the previous section, `pname` includes color information of each brick. No category is matching the color of the brick which makes them unimportant for the algorithm. Therefore, the following code will remove them:
+
+```{r da_remove_colors, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# Remove color information
+train_token <- train_token %>% anti_join(colors, by=c("word" = "lcName"))
+dim(train_token)
+head(train_token)
+```
+
+Instead of each single step, the whole preprocessing can be summarized:
+
+```{r da_preprocessing, echo=TRUE, error=TRUE, cache=TRUE, message=FALSE, warning=FALSE}
+# Remove spaces in pattern: " x " to "x"
+train <- as_tibble(lapply(train, function(x) {
+  gsub(" x ", "x", x)
+}))
+
+# Create tidy text data frame
+train_token <- train %>% 
+  unnest_tokens(output = word, input = pname) %>%
+  # Remove stop words
+  anti_join(stop_words, by=c("word" = "word")) %>%
+  # Remove color information
+  anti_join(colors, by=c("word" = "lcName")) %>%
+  # Remove numbers
+  filter(!str_detect(word, "^[0-9]*$"))
+```
+
+The final data frame is in a tidy text format but not useful as an input for the function `train` of the *caret* package. The function `train` requires a matrix, each value representing a factor and each line representing an observation. 
+
+One opportunity to create this matrix is to cast the tidy text data frame as a Document-Term-Matrix. A Document-Term-Matrix contains the documents as observation in each row. In this project the document is the product, represented by the value `pid`. Each column of the Document-Term-Matrix represents a term, which means here the single token from the value `pname`. The value of each document-term relation contains the information, how often this document contains this term. The following code will the preparation and the casting. The result is a sparse-matrix.
+
+```{r da_cast, echo=TRUE, error=TRUE, cache=TRUE, message=FALSE, warning=FALSE}
+train_dtm <- train_token %>%
+  # Count each word (term) for each product
+  count(pid, word) %>%
+  # Cast a document-term matrix
+  cast_dtm(document = pid, term = word, value = n)
+inspect(train_dtm)
+```
+
+As shown above my using the `inspect()` function from the *tm* package, the Document-Term-Matrix is quite big. It includes several terms which are used in only 1 product. This high sparsity cause a very long time to compute each model. In fact, it my system never calculates one model in less than 6h. To reduce this time, the following time will decrease the sparsity be removing terms which are used very seldom.
+
+```{r da_redSparse, echo=TRUE, error=TRUE, cache=TRUE, message=FALSE, warning=FALSE}
+train_dtm <- removeSparseTerms(train_dtm, sparse = .99)
+inspect(train_dtm)
+```
+
+As the `inspect()` function shows, the impact is quite massive and the models become computable. 
+
+Finally, the target variable has to be prepared by adding the category name to each row of the Document-Term-Matrix. For easy use, the target variable will be named `train_y`:
+
+```{r da_trainY, echo=TRUE, error=TRUE, cache=TRUE, message=FALSE, warning=FALSE}
+train_y <- as.data.frame(train_dtm$dimnames$Docs) %>% 
+  left_join(train, by = c("train_dtm$dimnames$Docs" = "pid")) %>% 
+  select("cname")
+```
+
+To summarize earlier shown steps, the data set `train` was prepared to be used in the machine learning algorithm. Therefore, the input matrix `train_dtm` as a Document-Term-Matrix and the target vector `train_y` were created.
+
+The next challenge is to determine the final model. To train the model, the *caret* package will be used which was introduced in previous courses.
+
+According to a previous task, the following code evaluates different models from the *caret* package. The target is to identify the model which performs best with standard options. The selection was overtaken from a previous course and adjusted to the requirements of this project, e.g. by removing models which requires different data sets. To get results quickly, cross-validation will be performed only twice in the evaluation.
+
+```{r da_models, echo=TRUE, error=TRUE, message=FALSE, warning=FALSE, cache=TRUE}
+# CAUTION: This evaluation will take several minutes up to hours!
+
+# List of models from the caret package
+models <- c("naive_bayes",  "svmLinear", 
+            "rf", "ranger",  "wsrf", "Rborist", 
+            "avNNet", "mlp", "monmlp")
+
+# Configuration of trControl
+control <- trainControl(method = "cv", 
+                        number = 2, 
+                        p = .9, 
+                        savePrediction = "final")
+
+# Train each model on the train data set
+set.seed(1, sample.kind = "Rounding")
+model_fits <- lapply(models, function(model){ 
+  train(x = as.matrix(train_dtm),
+        y = factor(train_y$cname),
+        method = model,
+        trControl = control)
+}) 
+
+# Summarize results
+## Add benchmark of 80% accuracy by manual work
+model_results <- tibble(Method = "Benchmark (Manual)", Accuracy = 0.8)
+
+## Add each model's accuracy to result table
+for(i in seq(1:length(models))){
+  model_results <- bind_rows(model_results, tibble(Method = model_fits[[i]]$method,
+                                                 Accuracy = max(model_fits[[i]]$results$Accuracy)))
+}
+
+## Show results
+model_results %>% arrange(desc(Accuracy))
+
+# Add model information
+names(model_fits) <- models
+```
+
+```{r da_bestmodel, echo=TRUE, error=TRUE, cache=TRUE, message=FALSE, warning=FALSE}
+model_fits$rf
+```
+
+As the results show, the model *rf* performs best with the current data set but still worse than the given benchmark of 80%. To exceed this benchmark, the rf model will be tuned by adjustig its parameter.
+
+To tune the model, the *caret* packages offers limited options. One option is of course to adjust the parameter on how many turns are computed in cross validation. Compute more turns results often in better insights of the model, especially reducing the overfitting to the training data. For performance reasons, this project will stay with 2 turns for the cross validation, which already take a lot of time.
+
+Indeed, to train the rf-model, the *caret* package only allows to tune the parameter `mtry` which represents the number of variables randomly sampled as candidates at each split. There is no further parameter for tuning available. In the previous calculation the model was trained with 3 tuning parameters, automatically set by the *caret* package: 2, 50, 99. The extend the range, the tuning grid will be set to every thenth values of `mtry` between 2 and 100.
+
+```{r da_tune_cv, echo=TRUE, error=TRUE, cache=TRUE, message=FALSE, warning=FALSE}
+# Configuration of trControl
+control <- trainControl(method = "cv", 
+                        number = 2, 
+                        p = .9, 
+                        savePrediction = "final")
+
+# Define tuneGrid for mtry
+tunegrid <- data.frame(mtry = seq(2, 100, 10))
+
+# Train rf model on the train data set
+set.seed(1, sample.kind = "Rounding")
+model_fit <- train(x = as.matrix(train_dtm),
+                   y = factor(train_y$cname),
+                   method = "rf",
+                   trControl = control,
+                   tuneGrid = tunegrid)
+
+# Accuracy of the traing data set
+ggplot(model_fit, highlight = TRUE)
+
+# Set mtry_tune to the best mtry to speed calculations
+mtry_tune <- model_fit$bestTune$mtry
+```
+
+As the results show, there is just a little improvement by tuning the parameter `mtry`. The reason for this is, that the function `train` of the *caret* package allready tuned the model with standard parameters. 
+
+Because the model *rf* with above identified tuning parameter `mtry_tune` is the model with the highest accucary, the final model will use these.
+
+# Results
+
+The data analysis and evaluation of the different models in the previous section showed, that the model *rf* performed best by providing the highest accuracy for the `train` data set. In a second step, this model was tuned by adjusting its parameter and using 10 instead of 2 cross-validation turns.
+
+To discuss the model performance and compare it to the benachmarking of 80% accuracy, the evaluation toward the `validation` data set is necessary. The following code prepares the `validation` data set, computes the prediction and evaluates the output of the algorithm.
+
+```{r r_validation, echo=TRUE, error=TRUE, cache=TRUE, message=FALSE, warning=FALSE}
+# Prepare validation data set
+## Remove spaces in pattern: " x " to "x"
+validation <- as_tibble(lapply(validation, function(x) {
+  gsub(" x ", "x", x)
+}))
+
+# Create tidy text data frame
+validation_token <- validation %>% 
+  unnest_tokens(output = word, input = pname) %>%
+  # Remove stop words
+  anti_join(stop_words, by=c("word" = "word")) %>%
+  # Remove color information
+  anti_join(colors, by=c("word" = "lcName")) %>%
+  # Remove numbers
+  filter(!str_detect(word, "^[0-9]*$"))
+
+## Cast DTM
+validation_dtm <- validation_token %>%
+  # Count each word (term) for each product
+  count(pid, word) %>%
+  # Cast a document-term matrix
+  cast_dtm(document = pid, term = word, value = n)
+
+## Generate validation target vector
+validation_y <- as.data.frame(validation_dtm$dimnames$Docs) %>% 
+  left_join(validation, by = c("validation_dtm$dimnames$Docs" = "pid")) %>% 
+  select("cname")
+
+# Compute prediction by validaion data set
+prediction <- predict(model_fit, validation_dtm)
+
+# Evaluate prediction
+mean(prediction == validation_y$cname)
+```
+The optimized model generates a prediction with an accuracy of 78.10% on the validation data set. The result is lower than the current benchmark of manual work.
+
+# Conclusion
+
+The target of this project was to develop an algorithm which supports my recurring task to classify products into our web shop categories. As a benchmark, internal tests state an accuracy of 80% by doing this manually. In additional, controlling calculates with about 1h work for about 1,000 products.
+
+To develop this algorithm, the *LEGO Database* data set from Kaggle was used. This data set provides information on LEGO bricks, including their unique product IDs, their product name and the corresponding product category. As a best performing model, this project identifies the *rf* model by using the *caret* package. Finally, this model achieved an accuracy of about 78.10% which is lower than the benchmarking.
+
+Nonetheless, it does not mean that this project fails, due to several reasons:
+1. No information about the accuracy of the *LEGO Database* is provided. This means, that the algorithm could be more accurate than calculated because of fault classification in the original data set.
+2. The benchmark of 80% is more a guessed value than a counted fact. This number was calculated by statistical methods. Furthermore, the circumstances were to show how good the classification is, not about its potential to be improved.
+3. For electronic components, we could use short descriptions with about 80 characters and long descriptions with about 1024 characters. Furthermore, technical parameters for each product are provided by the manufacturer. This information is available for the manual process but not in the used data set.
+4. Probably the strongest argument: While manual work takes about 1h to classify 1,000 products, it takes seconds to do the same with the algorithm if the model is computed. But it is work which can be processed without manual controll and therefore is no human resource.
+
+To conclude, this project already provides some good insights of the possible algorithm for future usage. The next step would be to check it with data of my real business. Unfortunately,  I am not allowed to share these data and the results.
